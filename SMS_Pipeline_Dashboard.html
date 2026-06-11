@@ -74,7 +74,7 @@
   <div class="card"><h2>Today — SMS Sent</h2><div class="kpi-value" id="kpi-sent">—</div><div class="kpi-sub">Outbound to Telnyx</div></div>
   <div class="card"><h2>Today — Delivered</h2><div class="kpi-value kpi-good" id="kpi-delivered">—</div><div class="kpi-sub" id="kpi-delivered-rate">—</div></div>
   <div class="card"><h2>Today — Replies</h2><div class="kpi-value" id="kpi-replies">—</div><div class="kpi-sub">Engagement only (excludes STOP)</div></div>
-  <div class="card"><h2>Response Yield</h2><div class="kpi-value kpi-good" id="kpi-yield">—</div><div class="kpi-sub">Engagement Replies ÷ Delivered (STOP not counted)</div></div>
+  <div class="card"><h2>Response Yield</h2><div class="kpi-value kpi-good" id="kpi-yield">—</div><div class="kpi-sub">Replies ÷ SMS_1 Delivered (Unique Lead base — STOP/Opt-Out excluded)</div></div>
 </div>
 
 <div class="grid grid-4" style="margin-bottom:14px;">
@@ -158,7 +158,7 @@ async function loadAll() {
   const today = todayISO();
 
   // KPIs from sms_history
-  const sentToday = await sb('sms_history', `direction=eq.outbound&send_timestamp=gte.${today}&select=mdr_id,status,is_test,account_number,sub_campaign,region`);
+  const sentToday = await sb('sms_history', `direction=eq.outbound&send_timestamp=gte.${today}&select=mdr_id,status,is_test,account_number,sub_campaign,region,sms_attempt`);
   const inToday   = await sb('sms_history', `direction=eq.inbound&send_timestamp=gte.${today}&select=mdr_id,reply_class,route_status,is_test,account_number`);
   const queue     = await sb('sms_send_queue', `status=eq.staged&select=queue_id`);
   // Saves today — sales_form_submissions joined by account to today's outbound recipients
@@ -166,11 +166,14 @@ async function loadAll() {
 
   const sent = sentToday.filter(r => !r.is_test).length;
   const delivered = sentToday.filter(r => !r.is_test && r.status === 'delivered').length;
-  // Replies = engagement only (NO opt-outs, NO test). STOP tracked separately.
+  // UNIQUE LEAD base (LOCKED 6/11): Response Yield uses SMS_1 Delivered ONLY
+  // SMS_2A and SMS_3A are escalations to the SAME customer — counting them double-counts the audience
+  const uniqueLeadDelivered = sentToday.filter(r => !r.is_test && r.status === 'delivered' && (r.sms_attempt === 1 || r.sms_attempt == null)).length;
+  // Replies = engagement only (NO opt-outs, NO test). STOP/Opt-Out tracked separately.
   const engagementReplies = inToday.filter(r => !r.is_test && r.reply_class !== 'opt_out');
   const replies = engagementReplies.length;
-  // Response yield = engagement replies / delivered (no STOP)
-  const responseYield = delivered ? (replies / delivered * 100).toFixed(1) : '0.0';
+  // Response yield = engagement replies / SMS_1 delivered (Unique Lead base, no STOP)
+  const responseYield = uniqueLeadDelivered ? (replies / uniqueLeadDelivered * 100).toFixed(1) : '0.0';
   // Saves tied to SMS: any save where account matches an SMS sent today
   const smsAccts = new Set(sentToday.filter(r => !r.is_test && r.account_number).map(r => r.account_number));
   const smsSaves = savesToday.filter(s => smsAccts.has(s.account_number));
