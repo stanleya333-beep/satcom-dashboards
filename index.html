@@ -74,14 +74,19 @@
   <div class="card"><h2>Today — SMS Sent</h2><div class="kpi-value" id="kpi-sent">—</div><div class="kpi-sub">Outbound to Telnyx</div></div>
   <div class="card"><h2>Today — Delivered</h2><div class="kpi-value kpi-good" id="kpi-delivered">—</div><div class="kpi-sub" id="kpi-delivered-rate">—</div></div>
   <div class="card"><h2>Today — Replies</h2><div class="kpi-value" id="kpi-replies">—</div><div class="kpi-sub" id="kpi-reply-rate">—</div></div>
-  <div class="card"><h2>Today — Positive (1/2/3)</h2><div class="kpi-value kpi-good" id="kpi-positive">—</div><div class="kpi-sub" id="kpi-positive-rate">—</div></div>
+  <div class="card"><h2>Response Yield</h2><div class="kpi-value kpi-good" id="kpi-yield">—</div><div class="kpi-sub">Replies ÷ Delivered</div></div>
 </div>
 
 <div class="grid grid-4" style="margin-bottom:14px;">
-  <div class="card"><h2>Routed to Callback</h2><div class="kpi-value" id="kpi-routed">—</div><div class="kpi-sub">Successfully placed in Genesys list</div></div>
-  <div class="card"><h2>Stranded</h2><div class="kpi-value kpi-bad" id="kpi-stranded">—</div><div class="kpi-sub">No route / skipped / failed</div></div>
-  <div class="card"><h2>Opt-Out (STOP)</h2><div class="kpi-value kpi-warn" id="kpi-stop">—</div><div class="kpi-sub">DNC propagation needed</div></div>
+  <div class="card"><h2>Today — Positive (1/2/3)</h2><div class="kpi-value kpi-good" id="kpi-positive">—</div><div class="kpi-sub" id="kpi-positive-rate">—</div></div>
+  <div class="card"><h2>Routed to Callback</h2><div class="kpi-value" id="kpi-routed">—</div><div class="kpi-sub">Placed in Genesys list</div></div>
+  <div class="card"><h2>SMS Saves</h2><div class="kpi-value kpi-good" id="kpi-saves">—</div><div class="kpi-sub" id="kpi-saves-rev">—</div></div>
   <div class="card"><h2>Send Queue</h2><div class="kpi-value" id="kpi-queue">—</div><div class="kpi-sub">Awaiting drain</div></div>
+</div>
+
+<div class="grid grid-2" style="margin-bottom:14px;">
+  <div class="card"><h2>Stranded (replied but not routed)</h2><div class="kpi-value kpi-bad" id="kpi-stranded">—</div><div class="kpi-sub">Need manual recovery</div></div>
+  <div class="card"><h2>Opt-Out (STOP)</h2><div class="kpi-value kpi-warn" id="kpi-stop">—</div><div class="kpi-sub">DNC propagation needed</div></div>
 </div>
 
 <!-- Funnel chart + breakdown -->
@@ -153,13 +158,21 @@ async function loadAll() {
   const today = todayISO();
 
   // KPIs from sms_history
-  const sentToday = await sb('sms_history', `direction=eq.outbound&send_timestamp=gte.${today}&select=mdr_id,status_friendly,is_test`);
-  const inToday   = await sb('sms_history', `direction=eq.inbound&send_timestamp=gte.${today}&select=mdr_id,reply_class,route_status,is_test`);
+  const sentToday = await sb('sms_history', `direction=eq.outbound&send_timestamp=gte.${today}&select=mdr_id,status,is_test,account_number,sub_campaign,region`);
+  const inToday   = await sb('sms_history', `direction=eq.inbound&send_timestamp=gte.${today}&select=mdr_id,reply_class,route_status,is_test,account_number`);
   const queue     = await sb('sms_send_queue', `status=eq.staged&select=queue_id`);
+  // Saves today — sales_form_submissions joined by account to today's outbound recipients
+  const savesToday = await sb('sales_form_submissions', `sales_date_et=eq.${today.slice(0,10)}&select=account_number,save_type,monthly_revenue,agent_email`);
 
   const sent = sentToday.filter(r => !r.is_test).length;
-  const delivered = sentToday.filter(r => !r.is_test && r.status_friendly === 'delivered').length;
+  const delivered = sentToday.filter(r => !r.is_test && r.status === 'delivered').length;
   const replies = inToday.filter(r => !r.is_test).length;
+  // Response yield = replies / delivered
+  const responseYield = delivered ? (replies / delivered * 100).toFixed(1) : '0.0';
+  // Saves tied to SMS: any save where account matches an SMS sent today
+  const smsAccts = new Set(sentToday.filter(r => !r.is_test && r.account_number).map(r => r.account_number));
+  const smsSaves = savesToday.filter(s => smsAccts.has(s.account_number));
+  const smsRevenue = smsSaves.reduce((sum, s) => sum + (parseFloat(s.monthly_revenue) || 0), 0);
   const positive = inToday.filter(r => !r.is_test && ['english_call','spanish_call','positive'].includes(r.reply_class)).length;
   const routed = inToday.filter(r => !r.is_test && r.route_status && r.route_status.startsWith('routed')).length;
   const stranded = inToday.filter(r => !r.is_test && r.reply_class && ['english_call','spanish_call','positive'].includes(r.reply_class) && (!r.route_status || r.route_status.includes('skipped') || r.route_status === 'failed')).length;
@@ -170,9 +183,12 @@ async function loadAll() {
   document.getElementById('kpi-delivered-rate').textContent = sent ? ((delivered/sent*100).toFixed(1) + '% delivered') : '—';
   document.getElementById('kpi-replies').textContent = replies.toLocaleString();
   document.getElementById('kpi-reply-rate').textContent = sent ? ((replies/sent*100).toFixed(1) + '% reply rate') : '—';
+  document.getElementById('kpi-yield').textContent = responseYield + '%';
   document.getElementById('kpi-positive').textContent = positive.toLocaleString();
   document.getElementById('kpi-positive-rate').textContent = replies ? ((positive/replies*100).toFixed(1) + '% of replies') : '—';
   document.getElementById('kpi-routed').textContent = routed.toLocaleString();
+  document.getElementById('kpi-saves').textContent = smsSaves.length.toLocaleString();
+  document.getElementById('kpi-saves-rev').textContent = '$' + smsRevenue.toFixed(0) + ' MRR';
   document.getElementById('kpi-stranded').textContent = stranded.toLocaleString();
   document.getElementById('kpi-stop').textContent = stop.toLocaleString();
   document.getElementById('kpi-queue').textContent = queue.length.toLocaleString();
