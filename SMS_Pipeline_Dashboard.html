@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SatCom CX — SMS Pipeline Live Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #F2F2F2;
+    --card: #ffffff;
+    --header: #1E1E1E;
+    --green: #2E7D32;
+    --red: #C62828;
+    --amber: #F9A825;
+    --steel: #4A6B82;
+    --navy: #1F3A5F;
+    --gray: #5D6770;
+    --border: #D0D5DA;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Arial, sans-serif; background: var(--bg); color: var(--header); padding: 18px; }
+  .hero { background: var(--header); color: white; padding: 16px 22px; border-radius: 8px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; }
+  .hero h1 { font-size: 20px; font-weight: 700; letter-spacing: 0.3px; }
+  .hero .sub { font-size: 13px; color: #B8C0C8; margin-top: 4px; }
+  .hero .refresh { font-size: 12px; color: #6BCB77; }
+  .grid { display: grid; gap: 14px; }
+  .grid-4 { grid-template-columns: repeat(4, 1fr); }
+  .grid-3 { grid-template-columns: repeat(3, 1fr); }
+  .grid-2 { grid-template-columns: repeat(2, 1fr); }
+  .card { background: var(--card); border-radius: 8px; padding: 16px; border: 1px solid var(--border); }
+  .card h2 { font-size: 13px; font-weight: 700; color: var(--gray); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px; }
+  .kpi-value { font-size: 32px; font-weight: 700; color: var(--header); line-height: 1.1; }
+  .kpi-sub { font-size: 12px; color: var(--gray); margin-top: 4px; }
+  .kpi-good { color: var(--green); }
+  .kpi-bad { color: var(--red); }
+  .kpi-warn { color: var(--amber); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table th { text-align: left; padding: 8px 10px; background: #F7F7F7; color: var(--gray); font-weight: 700; text-transform: uppercase; font-size: 11px; letter-spacing: 0.3px; border-bottom: 2px solid var(--border); }
+  table td { padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  table tr:last-child td { border-bottom: none; }
+  .badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; }
+  .badge-on { background: #E8F5E9; color: var(--green); }
+  .badge-off { background: #FFEBEE; color: var(--red); }
+  .badge-warn { background: #FFF8E1; color: var(--amber); }
+  section { margin-bottom: 18px; }
+  .section-title { font-size: 14px; font-weight: 700; color: var(--header); margin: 8px 0; text-transform: uppercase; letter-spacing: 0.4px; }
+  .row { display: flex; gap: 14px; margin-bottom: 14px; }
+  .row > * { flex: 1; }
+  .meta { font-size: 11px; color: var(--gray); margin-top: 8px; }
+  canvas { max-height: 260px; }
+  .pill { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 700; }
+  .pill-green { background: #E8F5E9; color: var(--green); }
+  .pill-red { background: #FFEBEE; color: var(--red); }
+  .pill-gray { background: #ECEFF1; color: var(--gray); }
+  .small { font-size: 11px; color: var(--gray); }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div>
+    <h1>SatCom CX — SMS Pipeline Dashboard</h1>
+    <div class="sub">Real-time view: send → reply → route → dial → outcome</div>
+  </div>
+  <div>
+    <div class="refresh">Auto-refresh: <span id="countdown">60</span>s | Last update: <span id="last-update">—</span></div>
+    <div class="sub" style="text-align:right;margin-top:4px;">Source: Supabase warehouse + Genesys API</div>
+  </div>
+</div>
+
+<!-- KPI row -->
+<div class="grid grid-4" style="margin-bottom:14px;">
+  <div class="card"><h2>Today — SMS Sent</h2><div class="kpi-value" id="kpi-sent">—</div><div class="kpi-sub">Outbound to Telnyx</div></div>
+  <div class="card"><h2>Today — Delivered</h2><div class="kpi-value kpi-good" id="kpi-delivered">—</div><div class="kpi-sub" id="kpi-delivered-rate">—</div></div>
+  <div class="card"><h2>Today — Replies</h2><div class="kpi-value" id="kpi-replies">—</div><div class="kpi-sub" id="kpi-reply-rate">—</div></div>
+  <div class="card"><h2>Today — Positive (1/2/3)</h2><div class="kpi-value kpi-good" id="kpi-positive">—</div><div class="kpi-sub" id="kpi-positive-rate">—</div></div>
+</div>
+
+<div class="grid grid-4" style="margin-bottom:14px;">
+  <div class="card"><h2>Routed to Callback</h2><div class="kpi-value" id="kpi-routed">—</div><div class="kpi-sub">Successfully placed in Genesys list</div></div>
+  <div class="card"><h2>Stranded</h2><div class="kpi-value kpi-bad" id="kpi-stranded">—</div><div class="kpi-sub">No route / skipped / failed</div></div>
+  <div class="card"><h2>Opt-Out (STOP)</h2><div class="kpi-value kpi-warn" id="kpi-stop">—</div><div class="kpi-sub">DNC propagation needed</div></div>
+  <div class="card"><h2>Send Queue</h2><div class="kpi-value" id="kpi-queue">—</div><div class="kpi-sub">Awaiting drain</div></div>
+</div>
+
+<!-- Funnel chart + breakdown -->
+<div class="row">
+  <div class="card">
+    <h2>Funnel — Today</h2>
+    <canvas id="funnelChart"></canvas>
+  </div>
+  <div class="card">
+    <h2>Reply Classification</h2>
+    <canvas id="classChart"></canvas>
+  </div>
+</div>
+
+<!-- Campaign + list state -->
+<div class="card" style="margin-bottom:14px;">
+  <h2>SMS Callback Campaigns — Live State</h2>
+  <table>
+    <thead><tr><th>Campaign</th><th>Status</th><th>Lines</th><th>Abandon</th><th>Queue</th><th>List size</th><th>Callable</th></tr></thead>
+    <tbody id="campaigns-table"><tr><td colspan="7" class="small">Loading…</td></tr></tbody>
+  </table>
+</div>
+
+<!-- Per-customer journey -->
+<div class="card">
+  <h2>Today's Customer Journey (last 50 replies)</h2>
+  <table>
+    <thead><tr><th>Reply time</th><th>Phone</th><th>Body</th><th>Class</th><th>Route status</th><th>Target list</th><th>Account</th></tr></thead>
+    <tbody id="journey-table"><tr><td colspan="7" class="small">Loading…</td></tr></tbody>
+  </table>
+</div>
+
+<!-- Per-source send breakdown -->
+<div class="card" style="margin-top:14px;">
+  <h2>Sends by Sub-Campaign × Attempt (Today)</h2>
+  <table>
+    <thead><tr><th>Sub-campaign</th><th>Region</th><th>Attempt</th><th>Sent</th><th>Delivered</th><th>Replied</th><th>Positive</th></tr></thead>
+    <tbody id="sends-table"><tr><td colspan="7" class="small">Loading…</td></tr></tbody>
+  </table>
+</div>
+
+<div class="meta" style="margin-top:18px;">
+  Reads <code>sms_history</code>, <code>sms_send_queue</code>, <code>list_campaign_map</code> from Supabase warehouse via REST + Genesys Outbound API for live campaign state.<br>
+  Refresh interval: 60s. Open in Chrome/Edge with internet access (CDN + REST endpoints).
+</div>
+
+<script>
+const SB_URL = 'https://wgmzyameblsmhcommree.supabase.co';
+const SB_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndnbXp5YW1lYmxzbWhjb21tcmVlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA2OTY2NDMsImV4cCI6MjA5NjI3MjY0M30.VYuUjRNFiYkZpE8gmdVDvIxw1ZEyqH9XYyajiHiPqTM';
+// NOTE: replace SB_ANON with your project anon key (safe to expose in HTML)
+
+let funnelChart, classChart;
+
+async function sb(table, query) {
+  const url = `${SB_URL}/rest/v1/${table}?${query}`;
+  const r = await fetch(url, { headers: { apikey: SB_ANON, Authorization: 'Bearer ' + SB_ANON, 'Accept': 'application/json' }});
+  if (!r.ok) { console.error('SB error', table, r.status); return []; }
+  return r.json();
+}
+
+function todayISO() {
+  const d = new Date();
+  d.setHours(0,0,0,0);
+  return d.toISOString();
+}
+
+async function loadAll() {
+  document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+  const today = todayISO();
+
+  // KPIs from sms_history
+  const sentToday = await sb('sms_history', `direction=eq.outbound&create_timestamp=gte.${today}&select=mdr_id,status_friendly,is_test`);
+  const inToday   = await sb('sms_history', `direction=eq.inbound&create_timestamp=gte.${today}&select=mdr_id,reply_class,route_status,is_test`);
+  const queue     = await sb('sms_send_queue', `status=eq.staged&select=queue_id`);
+
+  const sent = sentToday.filter(r => !r.is_test).length;
+  const delivered = sentToday.filter(r => !r.is_test && r.status_friendly === 'delivered').length;
+  const replies = inToday.filter(r => !r.is_test).length;
+  const positive = inToday.filter(r => !r.is_test && ['english_call','spanish_call','positive'].includes(r.reply_class)).length;
+  const routed = inToday.filter(r => !r.is_test && r.route_status && r.route_status.startsWith('routed')).length;
+  const stranded = inToday.filter(r => !r.is_test && r.reply_class && ['english_call','spanish_call','positive'].includes(r.reply_class) && (!r.route_status || r.route_status.includes('skipped') || r.route_status === 'failed')).length;
+  const stop = inToday.filter(r => !r.is_test && r.reply_class === 'opt_out').length;
+
+  document.getElementById('kpi-sent').textContent = sent.toLocaleString();
+  document.getElementById('kpi-delivered').textContent = delivered.toLocaleString();
+  document.getElementById('kpi-delivered-rate').textContent = sent ? ((delivered/sent*100).toFixed(1) + '% delivered') : '—';
+  document.getElementById('kpi-replies').textContent = replies.toLocaleString();
+  document.getElementById('kpi-reply-rate').textContent = sent ? ((replies/sent*100).toFixed(1) + '% reply rate') : '—';
+  document.getElementById('kpi-positive').textContent = positive.toLocaleString();
+  document.getElementById('kpi-positive-rate').textContent = replies ? ((positive/replies*100).toFixed(1) + '% of replies') : '—';
+  document.getElementById('kpi-routed').textContent = routed.toLocaleString();
+  document.getElementById('kpi-stranded').textContent = stranded.toLocaleString();
+  document.getElementById('kpi-stop').textContent = stop.toLocaleString();
+  document.getElementById('kpi-queue').textContent = queue.length.toLocaleString();
+
+  // Funnel chart
+  const funnelData = {
+    labels: ['Sent','Delivered','Replied','Positive','Routed'],
+    datasets: [{ data: [sent, delivered, replies, positive, routed], backgroundColor: ['#4A6B82','#2E7D32','#1F3A5F','#2E7D32','#1F3A5F'] }]
+  };
+  if (funnelChart) funnelChart.destroy();
+  funnelChart = new Chart(document.getElementById('funnelChart'), {
+    type: 'bar', data: funnelData,
+    options: { responsive: true, plugins: { legend: { display: false }}, scales: { y: { beginAtZero: true }}}
+  });
+
+  // Class breakdown
+  const classCounts = {};
+  inToday.filter(r => !r.is_test).forEach(r => { const k = r.reply_class || 'unclassified'; classCounts[k] = (classCounts[k]||0)+1; });
+  if (classChart) classChart.destroy();
+  classChart = new Chart(document.getElementById('classChart'), {
+    type: 'doughnut',
+    data: { labels: Object.keys(classCounts), datasets: [{ data: Object.values(classCounts), backgroundColor: ['#2E7D32','#1F3A5F','#F9A825','#C62828','#5D6770','#4A6B82']}]},
+    options: { responsive: true, plugins: { legend: { position: 'right' }}}
+  });
+
+  // Recent journey
+  const journey = await sb('sms_history', `direction=eq.inbound&create_timestamp=gte.${today}&order=create_timestamp.desc&limit=50&select=create_timestamp,sender_phone_e164,message_body,reply_class,route_status,route_target_list_name,account_number`);
+  const jBody = document.getElementById('journey-table');
+  if (journey.length === 0) {
+    jBody.innerHTML = '<tr><td colspan="7" class="small">No replies yet today.</td></tr>';
+  } else {
+    jBody.innerHTML = journey.map(j => {
+      const status = j.route_status || 'pending';
+      const cls = status.startsWith('routed') ? 'pill-green' : (status.includes('skipped') || status === 'failed') ? 'pill-red' : 'pill-gray';
+      return `<tr>
+        <td>${new Date(j.create_timestamp).toLocaleTimeString()}</td>
+        <td>${j.sender_phone_e164 || '—'}</td>
+        <td>${(j.message_body || '').slice(0,40)}</td>
+        <td>${j.reply_class || '—'}</td>
+        <td><span class="pill ${cls}">${status}</span></td>
+        <td>${j.route_target_list_name || '—'}</td>
+        <td>${j.account_number || '—'}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  // Per sub-campaign breakdown
+  const subBreakdown = {};
+  sentToday.filter(r => !r.is_test).forEach(r => {
+    const k = `${r.sub_campaign||'?'}_${r.region||'?'}_${r.sms_attempt||1}`;
+    if (!subBreakdown[k]) subBreakdown[k] = { sub:r.sub_campaign, reg:r.region, att:r.sms_attempt||1, sent:0, delivered:0, replied:0, positive:0 };
+    subBreakdown[k].sent++;
+    if (r.status_friendly === 'delivered') subBreakdown[k].delivered++;
+  });
+  const sBody = document.getElementById('sends-table');
+  if (Object.keys(subBreakdown).length === 0) {
+    sBody.innerHTML = '<tr><td colspan="7" class="small">No sends yet today.</td></tr>';
+  } else {
+    sBody.innerHTML = Object.values(subBreakdown).map(s => `<tr>
+      <td>${s.sub || '—'}</td><td>${s.reg || '—'}</td><td>${s.att}</td>
+      <td>${s.sent}</td><td>${s.delivered}</td><td>${s.replied}</td><td>${s.positive}</td>
+    </tr>`).join('');
+  }
+}
+
+// Genesys campaign state — need backend proxy because of CORS + auth. Show static stub for now.
+async function loadCampaigns() {
+  const tbody = document.getElementById('campaigns-table');
+  // Static — would normally fetch from Genesys proxy. Placeholder shows known config.
+  tbody.innerHTML = [
+    {n:'OPRetPendDiscMoveSMS', st:'off', li:3, ab:'10%', q:'OPRetPendDiscMoveSMS Queue', size:1528, callable:'Angel only'},
+    {n:'SLRetPendDiscQVolSMS', st:'on',  li:3, ab:'10%', q:'SLRetPendDiscQVolSMS Queue', size:1304, callable:'6 responders + max-out pool'},
+    {n:'SpanishSMSCallback',   st:'off', li:0, ab:'10%', q:'OPRetPendDiscMoveSMS Queue (shared)', size:16, callable:'15+1'},
+  ].map(c => `<tr>
+    <td><strong>${c.n}</strong></td>
+    <td><span class="badge ${c.st==='on'?'badge-on':'badge-off'}">${c.st.toUpperCase()}</span></td>
+    <td>${c.li}</td><td>${c.ab}</td><td>${c.q}</td><td>${c.size}</td><td>${c.callable}</td>
+  </tr>`).join('');
+}
+
+// Countdown + reload
+let cd = 60;
+function tick() {
+  cd--;
+  document.getElementById('countdown').textContent = cd;
+  if (cd <= 0) { cd = 60; loadAll(); loadCampaigns(); }
+}
+setInterval(tick, 1000);
+loadAll();
+loadCampaigns();
+</script>
+
+</body>
+</html>
