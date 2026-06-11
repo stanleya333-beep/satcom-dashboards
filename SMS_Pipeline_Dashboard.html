@@ -148,9 +148,12 @@ async function sb(table, query) {
 }
 
 function todayISO() {
-  const d = new Date();
-  d.setHours(0,0,0,0);
-  return d.toISOString();
+  // ET-midnight expressed as UTC ISO (matches send_timestamp tz=UTC in warehouse)
+  // ET = UTC-4 (EDT). ET midnight today = today_UTC at 04:00.
+  const now = new Date();
+  // Get ET YYYY-MM-DD reliably regardless of browser tz
+  const etStr = now.toLocaleDateString('en-CA', { timeZone: 'America/New_York' }); // YYYY-MM-DD
+  return `${etStr}T04:00:00.000Z`;
 }
 
 async function loadAll() {
