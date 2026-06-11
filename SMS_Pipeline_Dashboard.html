@@ -153,8 +153,8 @@ async function loadAll() {
   const today = todayISO();
 
   // KPIs from sms_history
-  const sentToday = await sb('sms_history', `direction=eq.outbound&create_timestamp=gte.${today}&select=mdr_id,status_friendly,is_test`);
-  const inToday   = await sb('sms_history', `direction=eq.inbound&create_timestamp=gte.${today}&select=mdr_id,reply_class,route_status,is_test`);
+  const sentToday = await sb('sms_history', `direction=eq.outbound&send_timestamp=gte.${today}&select=mdr_id,status_friendly,is_test`);
+  const inToday   = await sb('sms_history', `direction=eq.inbound&send_timestamp=gte.${today}&select=mdr_id,reply_class,route_status,is_test`);
   const queue     = await sb('sms_send_queue', `status=eq.staged&select=queue_id`);
 
   const sent = sentToday.filter(r => !r.is_test).length;
@@ -199,7 +199,7 @@ async function loadAll() {
   });
 
   // Recent journey
-  const journey = await sb('sms_history', `direction=eq.inbound&create_timestamp=gte.${today}&order=create_timestamp.desc&limit=50&select=create_timestamp,sender_phone_e164,message_body,reply_class,route_status,route_target_list_name,account_number`);
+  const journey = await sb('sms_history', `direction=eq.inbound&send_timestamp=gte.${today}&order=send_timestamp.desc&limit=50&select=send_timestamp,create_timestamp,sender_phone_e164,message_body,reply_class,route_status,route_target_list_name,account_number`);
   const jBody = document.getElementById('journey-table');
   if (journey.length === 0) {
     jBody.innerHTML = '<tr><td colspan="7" class="small">No replies yet today.</td></tr>';
@@ -208,7 +208,7 @@ async function loadAll() {
       const status = j.route_status || 'pending';
       const cls = status.startsWith('routed') ? 'pill-green' : (status.includes('skipped') || status === 'failed') ? 'pill-red' : 'pill-gray';
       return `<tr>
-        <td>${new Date(j.create_timestamp).toLocaleTimeString()}</td>
+        <td>${new Date(j.send_timestamp || j.create_timestamp).toLocaleTimeString()}</td>
         <td>${j.sender_phone_e164 || '—'}</td>
         <td>${(j.message_body || '').slice(0,40)}</td>
         <td>${j.reply_class || '—'}</td>
@@ -243,9 +243,10 @@ async function loadCampaigns() {
   const tbody = document.getElementById('campaigns-table');
   // Static — would normally fetch from Genesys proxy. Placeholder shows known config.
   tbody.innerHTML = [
-    {n:'OPRetPendDiscMoveSMS', st:'off', li:3, ab:'10%', q:'OPRetPendDiscMoveSMS Queue', size:1528, callable:'Angel only'},
-    {n:'SLRetPendDiscQVolSMS', st:'on',  li:3, ab:'10%', q:'SLRetPendDiscQVolSMS Queue', size:1304, callable:'6 responders + max-out pool'},
-    {n:'SpanishSMSCallback',   st:'off', li:0, ab:'10%', q:'OPRetPendDiscMoveSMS Queue (shared)', size:16, callable:'15+1'},
+    {n:'OPRetPendDiscMoveSMS (East Move)',  st:'off', li:3, ab:'10%', q:'OPRetPendDiscMoveSMS Queue',  size:'—', callable:'(uat-only)'},
+    {n:'OPRetPendDiscQVolSMS (East Vol)',   st:'on',  li:3, ab:'10%', q:'OPRetPendDiscQVolSMS Queue',  size:'—', callable:'real responders'},
+    {n:'SLRetPendDiscQVolSMS (West Vol)',   st:'on',  li:3, ab:'10%', q:'SLRetPendDiscQVolSMS Queue',  size:'—', callable:'real responders'},
+    {n:'SpanishSMSCallback',                st:'off', li:0, ab:'10%', q:'shared',                       size:'—', callable:'on hold'},
   ].map(c => `<tr>
     <td><strong>${c.n}</strong></td>
     <td><span class="badge ${c.st==='on'?'badge-on':'badge-off'}">${c.st.toUpperCase()}</span></td>
