@@ -73,8 +73,8 @@
 <div class="grid grid-4" style="margin-bottom:14px;">
   <div class="card"><h2>Today — SMS Sent</h2><div class="kpi-value" id="kpi-sent">—</div><div class="kpi-sub">Outbound to Telnyx</div></div>
   <div class="card"><h2>Today — Delivered</h2><div class="kpi-value kpi-good" id="kpi-delivered">—</div><div class="kpi-sub" id="kpi-delivered-rate">—</div></div>
-  <div class="card"><h2>Today — Replies</h2><div class="kpi-value" id="kpi-replies">—</div><div class="kpi-sub" id="kpi-reply-rate">—</div></div>
-  <div class="card"><h2>Response Yield</h2><div class="kpi-value kpi-good" id="kpi-yield">—</div><div class="kpi-sub">Replies ÷ Delivered</div></div>
+  <div class="card"><h2>Today — Replies</h2><div class="kpi-value" id="kpi-replies">—</div><div class="kpi-sub">Engagement only (excludes STOP)</div></div>
+  <div class="card"><h2>Response Yield</h2><div class="kpi-value kpi-good" id="kpi-yield">—</div><div class="kpi-sub">(Replies − STOP) ÷ Delivered</div></div>
 </div>
 
 <div class="grid grid-4" style="margin-bottom:14px;">
@@ -85,8 +85,8 @@
 </div>
 
 <div class="grid grid-2" style="margin-bottom:14px;">
-  <div class="card"><h2>Stranded (replied but not routed)</h2><div class="kpi-value kpi-bad" id="kpi-stranded">—</div><div class="kpi-sub">Need manual recovery</div></div>
-  <div class="card"><h2>Opt-Out (STOP)</h2><div class="kpi-value kpi-warn" id="kpi-stop">—</div><div class="kpi-sub">DNC propagation needed</div></div>
+  <div class="card"><h2>Stranded</h2><div class="kpi-value kpi-bad" id="kpi-stranded">—</div><div class="kpi-sub">CM replied 1/2/3 but route-replies failed — needs manual callback recovery</div></div>
+  <div class="card"><h2>Opt-Out (STOP)</h2><div class="kpi-value kpi-warn" id="kpi-stop">—</div><div class="kpi-sub">Tracked separately. NOT in Replies/Yield. DNC required.</div></div>
 </div>
 
 <!-- Funnel chart + breakdown -->
@@ -166,8 +166,10 @@ async function loadAll() {
 
   const sent = sentToday.filter(r => !r.is_test).length;
   const delivered = sentToday.filter(r => !r.is_test && r.status === 'delivered').length;
-  const replies = inToday.filter(r => !r.is_test).length;
-  // Response yield = replies / delivered
+  // Replies = engagement only (NO opt-outs, NO test). STOP tracked separately.
+  const engagementReplies = inToday.filter(r => !r.is_test && r.reply_class !== 'opt_out');
+  const replies = engagementReplies.length;
+  // Response yield = engagement replies / delivered (no STOP)
   const responseYield = delivered ? (replies / delivered * 100).toFixed(1) : '0.0';
   // Saves tied to SMS: any save where account matches an SMS sent today
   const smsAccts = new Set(sentToday.filter(r => !r.is_test && r.account_number).map(r => r.account_number));
