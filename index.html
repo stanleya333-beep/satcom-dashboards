@@ -190,7 +190,7 @@ async function loadAll() {
   document.getElementById('kpi-delivered').textContent = delivered.toLocaleString();
   document.getElementById('kpi-delivered-rate').textContent = sent ? ((delivered/sent*100).toFixed(1) + '% delivered') : '—';
   document.getElementById('kpi-replies').textContent = replies.toLocaleString();
-  document.getElementById('kpi-reply-rate').textContent = sent ? ((replies/sent*100).toFixed(1) + '% reply rate') : '—';
+  { const _rr = document.getElementById('kpi-reply-rate'); if (_rr) _rr.textContent = sent ? ((replies/sent*100).toFixed(1) + '% reply rate') : '—'; }
   document.getElementById('kpi-yield').textContent = responseYield + '%';
   document.getElementById('kpi-positive').textContent = positive.toLocaleString();
   document.getElementById('kpi-positive-rate').textContent = replies ? ((positive/replies*100).toFixed(1) + '% of replies') : '—';
