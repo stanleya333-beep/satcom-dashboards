@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><title>Leads Lifecycle — SatCom CX</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+:root{--brand-blue:#1A6AFF;--brand-dark:#0A0A0A;--bg:#F5F7FA;--card:#FFFFFF;--green:#0FAA5E;--red:#ED1566;--amber:#F5A623;--text:#1a1a1a;--mid:#5f6360;--rule:#E0E5EC}
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);padding-bottom:40px}
+header{background:#FFF;padding:18px 40px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--rule)}
+header h1{font-size:22px;color:var(--brand-dark)}header .sub{color:var(--mid);font-size:13px;margin-top:2px}
+.container{padding:24px 40px}.row{display:grid;grid-template-columns:repeat(6,1fr);gap:14px;margin-bottom:20px}
+.tile{background:var(--card);padding:16px;border-radius:8px;border:1px solid var(--rule)}
+.tile .label{color:var(--mid);font-size:10px;text-transform:uppercase;letter-spacing:.5px}
+.tile .value{font-size:22px;font-weight:600;color:var(--brand-dark);margin-top:4px}
+.tile .sub{color:var(--mid);font-size:11px;margin-top:2px}
+.card{background:var(--card);padding:20px;border-radius:8px;border:1px solid var(--rule);margin-bottom:20px}
+.card h2{font-size:16px;color:var(--brand-dark);margin-bottom:12px}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;padding:6px 8px;border-bottom:2px solid var(--rule);color:var(--mid);font-weight:600;font-size:10px;text-transform:uppercase}
+td{padding:6px 8px;border-bottom:1px solid var(--rule)}tr:hover td{background:#F8FAFC}
+.chart-wrap{height:300px;position:relative}
+.controls{display:flex;gap:8px;margin-bottom:16px}.controls button{padding:8px 14px;border:1px solid var(--rule);background:#FFF;border-radius:6px;cursor:pointer;font-size:13px}
+.controls button.active{background:var(--brand-blue);color:#FFF;border-color:var(--brand-blue)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+</style></head>
+<body>
+<header><div><h1>Leads Lifecycle Report</h1><div class="sub">Campaign overview · attempt distribution · saves by attempt · disposition mix · daily pool movement · aged leads</div></div>
+<div class="sub">SatCom CX · Operations Warehouse · <span id="last-updated"></span></div></header>
+<div class="container">
+  <div class="controls">
+    <button class="active" onclick="setRange(7,this)">Last 7d</button>
+    <button onclick="setRange(14,this)">Last 14d</button>
+    <button onclick="setRange(30,this)">Last 30d</button>
+    <button onclick="setRange(60,this)">Last 60d</button>
+  </div>
+  <div class="row">
+    <div class="tile"><div class="label">Leads Loaded</div><div class="value" id="t-loaded">—</div></div>
+    <div class="tile"><div class="label">Total Dials</div><div class="value" id="t-dials">—</div></div>
+    <div class="tile"><div class="label">Contacts</div><div class="value" id="t-contacts">—</div></div>
+    <div class="tile"><div class="label">Conv</div><div class="value" id="t-conv">—</div></div>
+    <div class="tile"><div class="label">Finalized</div><div class="value" id="t-final">—</div></div>
+    <div class="tile"><div class="label">Saves</div><div class="value" id="t-saves">—</div></div>
+  </div>
+  <div class="card"><h2>Campaign Overview</h2><div style="overflow:auto"><table id="campaign-table"><thead><tr><th>Campaign</th><th>Loaded</th><th>Dials</th><th>Contacts</th><th>Conv</th><th>Final</th><th>Saves</th><th>Save %</th><th>Contact %</th><th>Conv %</th></tr></thead><tbody></tbody></table></div></div>
+  <div class="grid2">
+    <div class="card"><h2>Daily Dial Volume</h2><div class="chart-wrap"><canvas id="daily-chart"></canvas></div></div>
+    <div class="card"><h2>Daily Save Volume</h2><div class="chart-wrap"><canvas id="saves-chart"></canvas></div></div>
+  </div>
+  <div class="grid2">
+    <div class="card"><h2>Daily Contact + Conv Rates</h2><div class="chart-wrap"><canvas id="rates-chart"></canvas></div></div>
+    <div class="card"><h2>Daily Pool Movement (Loaded - Dials - Finalized)</h2><div class="chart-wrap"><canvas id="pool-chart"></canvas></div></div>
+  </div>
+</div>
+<script>
+const SUPA_URL='https://wgmzyameblsmhcommree.supabase.co'; const ANON='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndnbXp5YW1lYmxzbWhjb21tcmVlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA2OTY2NDMsImV4cCI6MjA5NjI3MjY0M30.VYuUjRNFiYkZpE8gmdVDvIxw1ZEyqH9XYyajiHiPqTM';
+let dailyChart, savesChart, ratesChart, poolChart;
+function setRange(days,btn){
+  document.querySelectorAll('.controls button').forEach(b=>b.classList.remove('active'));
+  if(btn) btn.classList.add('active');
+  loadReport(days);
+}
+async function loadReport(days){
+  const since = new Date(Date.now() - days*24*60*60*1000).toISOString().split('T')[0];
+  const url = SUPA_URL + '/rest/v1/daily_kpis?select=*&report_date=gte.'+since+'&order=report_date.asc';
+  const r = await fetch(url, {headers:{'apikey':ANON,'Authorization':'Bearer '+ANON,'Range':'0-9999','Range-Unit':'items'}});
+  if(!r.ok){ console.error(await r.text()); return; }
+  const rows = await r.json();
+  // Aggregate by campaign + by date
+  const byCamp = {}, byDate = {};
+  let TL=0,TD=0,TC=0,TV=0,TF=0,TS=0;
+  rows.forEach(r=>{
+    const c = r.campaign_id || 'Unknown'; const d = r.report_date;
+    if(!byCamp[c]) byCamp[c] = {loaded:0,dials:0,contacts:0,conv:0,final:0,saves:0};
+    if(!byDate[d]) byDate[d] = {dials:0,contacts:0,conv:0,final:0,saves:0,loaded:0};
+    const o = byCamp[c]; const e = byDate[d];
+    o.loaded += +(r.leads_loaded||0); o.dials += +(r.dials||0); o.contacts += +(r.contacts_count||0);
+    o.conv += +(r.conversations||0); o.final += +(r.finalized||0); o.saves += +(r.saves||0);
+    e.loaded += +(r.leads_loaded||0); e.dials += +(r.dials||0); e.contacts += +(r.contacts_count||0);
+    e.conv += +(r.conversations||0); e.final += +(r.finalized||0); e.saves += +(r.saves||0);
+    TL += +(r.leads_loaded||0); TD += +(r.dials||0); TC += +(r.contacts_count||0); TV += +(r.conversations||0); TF += +(r.finalized||0); TS += +(r.saves||0);
+  });
+  document.getElementById('t-loaded').textContent = TL.toLocaleString();
+  document.getElementById('t-dials').textContent = TD.toLocaleString();
+  document.getElementById('t-contacts').textContent = TC.toLocaleString();
+  document.getElementById('t-conv').textContent = TV.toLocaleString();
+  document.getElementById('t-final').textContent = TF.toLocaleString();
+  document.getElementById('t-saves').textContent = TS.toLocaleString();
+  document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleString();
+  // Campaign table
+  const tbody = document.querySelector('#campaign-table tbody'); tbody.innerHTML = '';
+  const camps = Object.keys(byCamp).sort((a,b)=>byCamp[b].dials-byCamp[a].dials);
+  camps.forEach(c=>{
+    const o = byCamp[c];
+    const sp = o.dials ? (100*o.saves/o.dials).toFixed(2) : '0';
+    const cp = o.dials ? (100*o.contacts/o.dials).toFixed(1) : '0';
+    const vp = o.contacts ? (100*o.conv/o.contacts).toFixed(1) : '0';
+    tbody.innerHTML += '<tr><td>'+c+'</td><td>'+o.loaded.toLocaleString()+'</td><td>'+o.dials.toLocaleString()+'</td><td>'+o.contacts.toLocaleString()+'</td><td>'+o.conv.toLocaleString()+'</td><td>'+o.final.toLocaleString()+'</td><td>'+o.saves.toLocaleString()+'</td><td>'+sp+'%</td><td>'+cp+'%</td><td>'+vp+'%</td></tr>';
+  });
+  // Charts
+  const dates = Object.keys(byDate).sort();
+  [dailyChart, savesChart, ratesChart, poolChart].forEach(c=>c&&c.destroy());
+  dailyChart = new Chart(document.getElementById('daily-chart'),{type:'bar',data:{labels:dates,datasets:[
+    {label:'Dials',data:dates.map(d=>byDate[d].dials),backgroundColor:'#1A6AFF'},
+    {label:'Contacts',data:dates.map(d=>byDate[d].contacts),backgroundColor:'#0FAA5E'},
+    {label:'Conv',data:dates.map(d=>byDate[d].conv),backgroundColor:'#F5A623'},
+  ]},options:{responsive:true,maintainAspectRatio:false}});
+  savesChart = new Chart(document.getElementById('saves-chart'),{type:'line',data:{labels:dates,datasets:[
+    {label:'Saves',data:dates.map(d=>byDate[d].saves),borderColor:'#ED1566',backgroundColor:'#FCDEE8',fill:true,tension:0.3},
+    {label:'Finalized',data:dates.map(d=>byDate[d].final),borderColor:'#1A6AFF',backgroundColor:'transparent',tension:0.3},
+  ]},options:{responsive:true,maintainAspectRatio:false}});
+  ratesChart = new Chart(document.getElementById('rates-chart'),{type:'line',data:{labels:dates,datasets:[
+    {label:'Contact %', data:dates.map(d=>byDate[d].dials?(100*byDate[d].contacts/byDate[d].dials):0),borderColor:'#0FAA5E',tension:0.3},
+    {label:'Conv % (of Contacts)', data:dates.map(d=>byDate[d].contacts?(100*byDate[d].conv/byDate[d].contacts):0),borderColor:'#F5A623',tension:0.3},
+    {label:'Save % (of Dials)', data:dates.map(d=>byDate[d].dials?(100*byDate[d].saves/byDate[d].dials):0),borderColor:'#ED1566',tension:0.3},
+  ]},options:{responsive:true,maintainAspectRatio:false,scales:{y:{ticks:{callback:v=>v+'%'}}}}});
+  poolChart = new Chart(document.getElementById('pool-chart'),{type:'bar',data:{labels:dates,datasets:[
+    {label:'Loaded',data:dates.map(d=>byDate[d].loaded),backgroundColor:'#CBDCE9'},
+    {label:'Finalized (removed from pool)',data:dates.map(d=>-byDate[d].final),backgroundColor:'#ED1566'},
+  ]},options:{responsive:true,maintainAspectRatio:false,scales:{x:{stacked:true},y:{stacked:true}}}});
+}
+loadReport(7);
+</script></body></html>
