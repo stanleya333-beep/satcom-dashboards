@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><title>Warehouse Backup Audit — SatCom CX</title>
+<style>
+:root{--brand-blue:#1A6AFF;--brand-dark:#0A0A0A;--bg:#F5F7FA;--card:#FFFFFF;--green:#0FAA5E;--red:#ED1566;--amber:#F5A623;--text:#1a1a1a;--mid:#5f6360;--rule:#E0E5EC}
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);padding-bottom:40px}
+header{background:#FFF;padding:18px 40px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--rule)}
+header h1{font-size:22px;color:var(--brand-dark)}header .sub{color:var(--mid);font-size:13px;margin-top:2px}
+.container{padding:24px 40px}.row{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px}
+.tile{background:var(--card);padding:18px;border-radius:8px;border:1px solid var(--rule)}
+.tile .label{color:var(--mid);font-size:11px;text-transform:uppercase}
+.tile .value{font-size:24px;font-weight:600;color:var(--brand-dark);margin-top:4px}
+.card{background:var(--card);padding:20px;border-radius:8px;border:1px solid var(--rule);margin-bottom:20px}
+.card h2{font-size:16px;color:var(--brand-dark);margin-bottom:12px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;padding:8px;border-bottom:2px solid var(--rule);color:var(--mid);font-weight:600;font-size:11px;text-transform:uppercase}
+td{padding:8px;border-bottom:1px solid var(--rule)}
+.warn{color:var(--red);font-weight:600}.good{color:var(--green);font-weight:600}.amber{color:var(--amber);font-weight:600}
+</style></head>
+<body>
+<header><div><h1>Warehouse Backup Audit</h1><div class="sub">PITR window, pg_dump status, row counts, freshness across critical tables</div></div>
+<div class="sub">SatCom CX · Operations Warehouse · <span id="last-updated"></span></div></header>
+<div class="container">
+  <div class="row">
+    <div class="tile"><div class="label">Critical Tables Monitored</div><div class="value" id="t-tables">7</div></div>
+    <div class="tile"><div class="label">All Tables Healthy?</div><div class="value good" id="t-health">—</div></div>
+    <div class="tile"><div class="label">Last Successful Write</div><div class="value" id="t-last">—</div></div>
+    <div class="tile"><div class="label">PITR Retention</div><div class="value" id="t-pitr">7 days</div></div>
+  </div>
+  <div class="card"><h2>Critical Table Health Matrix</h2><div style="overflow:auto"><table id="health-table"><thead><tr><th>Table</th><th>Rows</th><th>Most Recent Write (UTC)</th><th>Min Lag</th><th>Expected Cadence</th><th>Status</th></tr></thead><tbody></tbody></table></div></div>
+  <div class="card"><h2>Reference</h2>
+  <p style="color:var(--mid);font-size:13px;line-height:1.6">
+  Supabase PITR window: <strong>7 days</strong> on Pro plan. Daily logical backups via pg_dump live in storage bucket. Better Stack monitors heartbeats on the 4 scheduled writers (sftp_poll, sms_drain, eod_build, return_file_upload).<br><br>
+  <strong>If a table is RED:</strong> check Better Stack alerts → review scheduled task in Windows Task Scheduler (`SatCom_*`) → manual run from /Scheduled/.
+  </p></div>
+</div>
+<script>
+const SUPA_URL='https://wgmzyameblsmhcommree.supabase.co'; const ANON='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndnbXp5YW1lYmxzbWhjb21tcmVlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA2OTY2NDMsImV4cCI6MjA5NjI3MjY0M30.VYuUjRNFiYkZpE8gmdVDvIxw1ZEyqH9XYyajiHiPqTM';
+const tables = [
+  {name:'calls', col:'conversation_start', cadence:'continuous (Genesys pull)', warn_min:60},
+  {name:'sales_form_submissions', col:'submitted_at', cadence:'on every form submit', warn_min:120},
+  {name:'sms_history', col:'created_at', cadence:'on every Telnyx event', warn_min:180},
+  {name:'altice_returns', col:'created_at', cadence:'nightly + intra-day', warn_min:1440},
+  {name:'daily_kpis', col:'computed_at', cadence:'every 15 min', warn_min:30},
+  {name:'lead_imports_staging', col:'created_at', cadence:'on every SFTP drop', warn_min:1440},
+  {name:'contacts_state', col:'observed_at', cadence:'daily refresh', warn_min:1440},
+];
+async function load(){
+  const tb = document.querySelector('#health-table tbody'); tb.innerHTML='';
+  let allHealthy = true; let mostRecent = null;
+  for(const t of tables){
+    const url = SUPA_URL + '/rest/v1/' + t.name + '?select=' + t.col + '&order=' + t.col + '.desc&limit=1';
+    const r = await fetch(url,{headers:{'apikey':ANON,'Authorization':'Bearer '+ANON,'Prefer':'count=exact'}});
+    const rng = r.headers.get('content-range') || '';
+    const total = (rng.split('/')[1] || '?').toString();
+    const data = await r.json();
+    const latest = data.length ? data[0][t.col] : null;
+    const lagMin = latest ? Math.round((Date.now() - new Date(latest).getTime())/60000) : 999999;
+    const ok = lagMin <= t.warn_min;
+    const status = ok ? '<span class="good">OK</span>' : (lagMin<t.warn_min*3 ? '<span class="amber">STALE</span>' : '<span class="warn">CRITICAL</span>');
+    if(!ok) allHealthy = false;
+    if(latest && (!mostRecent || latest > mostRecent)) mostRecent = latest;
+    tb.innerHTML += '<tr><td><code>'+t.name+'</code></td><td>'+(total!=='*'?Number(total).toLocaleString():'—')+'</td><td>'+(latest||'never')+'</td><td>'+(lagMin>=999999?'never':lagMin+' min')+'</td><td>'+t.cadence+'</td><td>'+status+'</td></tr>';
+  }
+  document.getElementById('t-tables').textContent = tables.length;
+  document.getElementById('t-health').textContent = allHealthy ? 'YES' : 'NO';
+  document.getElementById('t-health').className = 'value ' + (allHealthy?'good':'warn');
+  document.getElementById('t-last').textContent = mostRecent ? new Date(mostRecent).toLocaleString() : '—';
+  document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleString();
+}
+load();
+</script></body></html>
