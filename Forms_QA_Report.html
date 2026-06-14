@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><title>Forms QA — SatCom CX</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+:root{--brand-blue:#1A6AFF;--brand-dark:#0A0A0A;--bg:#F5F7FA;--card:#FFFFFF;--green:#0FAA5E;--red:#ED1566;--amber:#F5A623;--text:#1a1a1a;--mid:#5f6360;--rule:#E0E5EC}
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);padding-bottom:40px}
+header{background:#FFF;padding:18px 40px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--rule)}
+header h1{font-size:22px;color:var(--brand-dark)}header .sub{color:var(--mid);font-size:13px;margin-top:2px}
+.container{padding:24px 40px}.row{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px}
+.tile{background:var(--card);padding:18px;border-radius:8px;border:1px solid var(--rule)}
+.tile .label{color:var(--mid);font-size:11px;text-transform:uppercase}
+.tile .value{font-size:26px;font-weight:600;color:var(--brand-dark);margin-top:4px}
+.card{background:var(--card);padding:20px;border-radius:8px;border:1px solid var(--rule);margin-bottom:20px}
+.card h2{font-size:16px;color:var(--brand-dark);margin-bottom:12px}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;padding:8px;border-bottom:2px solid var(--rule);color:var(--mid);font-weight:600;font-size:11px;text-transform:uppercase}
+td{padding:6px 8px;border-bottom:1px solid var(--rule)}tr:hover td{background:#F8FAFC}
+.warn{color:var(--red);font-weight:600}.amber{color:var(--amber);font-weight:600}.good{color:var(--green);font-weight:600}
+.chart-wrap{height:280px;position:relative}
+.controls{display:flex;gap:8px;margin-bottom:16px}.controls button{padding:8px 14px;border:1px solid var(--rule);background:#FFF;border-radius:6px;cursor:pointer;font-size:13px}
+.controls button.active{background:var(--brand-blue);color:#FFF;border-color:var(--brand-blue)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+</style></head>
+<body>
+<header><div><h1>Forms QA Dashboard</h1><div class="sub">Form-level data quality — label drift, missing accounts, agent normalization issues</div></div>
+<div class="sub">SatCom CX · Operations Warehouse · <span id="last-updated"></span></div></header>
+<div class="container">
+  <div class="controls">
+    <button class="active" onclick="setRange(7,this)">Last 7d</button>
+    <button onclick="setRange(14,this)">Last 14d</button>
+    <button onclick="setRange(30,this)">Last 30d</button>
+  </div>
+  <div class="row">
+    <div class="tile"><div class="label">Total Submissions</div><div class="value" id="t-total">—</div></div>
+    <div class="tile"><div class="label">Missing Account #</div><div class="value warn" id="t-missing-acct">—</div></div>
+    <div class="tile"><div class="label">Missing Phone</div><div class="value warn" id="t-missing-ph">—</div></div>
+    <div class="tile"><div class="label">Campaign Label Drift</div><div class="value amber" id="t-drift">—</div></div>
+  </div>
+  <div class="grid2">
+    <div class="card"><h2>Submissions by Form Source</h2><div class="chart-wrap"><canvas id="source-chart"></canvas></div></div>
+    <div class="card"><h2>Missing Data Trend (Daily)</h2><div class="chart-wrap"><canvas id="trend-chart"></canvas></div></div>
+  </div>
+  <div class="card"><h2>Campaign Label Variants (drift = same form_source, different "campaign" values)</h2><div style="max-height:300px;overflow:auto"><table id="drift-table"><thead><tr><th>Form Source</th><th>Campaign Value (verbatim)</th><th>Count</th><th>Status</th></tr></thead><tbody></tbody></table></div></div>
+  <div class="card"><h2>Agent Name Variants (e.g. "MAKAYLA HARRISON" vs "Makayla.Harrison@satcomcx.com")</h2><div style="max-height:300px;overflow:auto"><table id="agent-table"><thead><tr><th>Agent Name (verbatim)</th><th>Submissions</th><th>Form Sources</th></tr></thead><tbody></tbody></table></div></div>
+  <div class="card"><h2>Rows Missing Required Fields</h2><div style="max-height:300px;overflow:auto"><table id="missing-table"><thead><tr><th>Date</th><th>Form</th><th>Campaign</th><th>Agent</th><th>Account</th><th>Phone</th><th>Issue</th></tr></thead><tbody></tbody></table></div></div>
+</div>
+<script>
+const SUPA_URL='https://wgmzyameblsmhcommree.supabase.co'; const ANON='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndnbXp5YW1lYmxzbWhjb21tcmVlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA2OTY2NDMsImV4cCI6MjA5NjI3MjY0M30.VYuUjRNFiYkZpE8gmdVDvIxw1ZEyqH9XYyajiHiPqTM';
+let sourceChart, trendChart;
+function setRange(d,b){document.querySelectorAll('.controls button').forEach(x=>x.classList.remove('active'));if(b)b.classList.add('active');load(d);}
+async function load(days){
+  const since = new Date(Date.now()-days*86400000).toISOString();
+  const url = SUPA_URL + '/rest/v1/sales_form_submissions?select=submitted_at,form_source,campaign,agent_name,account_number,phone_number&submitted_at=gte.'+since;
+  const r = await fetch(url,{headers:{'apikey':ANON,'Authorization':'Bearer '+ANON,'Range':'0-49999','Range-Unit':'items'}});
+  if(!r.ok){console.error(await r.text());return;}
+  const rows = await r.json();
+  // Aggregate
+  const bySource = {}, byDay = {}, campVariants = {}, agentVariants = {};
+  let missAcct=0,missPh=0;
+  rows.forEach(r=>{
+    const day = (r.submitted_at||'').split('T')[0];
+    const src = r.form_source || 'unknown';
+    bySource[src] = (bySource[src]||0)+1;
+    if(!byDay[day]) byDay[day] = {missing_acct:0,missing_ph:0,total:0};
+    byDay[day].total++;
+    if(!r.account_number || !r.account_number.toString().trim()){missAcct++; byDay[day].missing_acct++;}
+    if(!r.phone_number || !r.phone_number.toString().trim()){missPh++; byDay[day].missing_ph++;}
+    const ckey = src + '|' + (r.campaign||'(blank)');
+    campVariants[ckey] = (campVariants[ckey]||0)+1;
+    const ag = r.agent_name||'(blank)';
+    if(!agentVariants[ag]) agentVariants[ag] = {n:0, sources:new Set()};
+    agentVariants[ag].n++; agentVariants[ag].sources.add(src);
+  });
+  // Drift detection: campaigns appearing < 5 times under same form_source = likely typo/drift
+  const driftRows = Object.entries(campVariants).filter(([k,v])=>v<5 && k.split('|')[1]!=='(blank)').sort((a,b)=>a[1]-b[1]);
+  document.getElementById('t-total').textContent = rows.length.toLocaleString();
+  document.getElementById('t-missing-acct').textContent = missAcct.toLocaleString();
+  document.getElementById('t-missing-ph').textContent = missPh.toLocaleString();
+  document.getElementById('t-drift').textContent = driftRows.length.toLocaleString();
+  document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleString();
+  
+  if(sourceChart) sourceChart.destroy();
+  const sk = Object.keys(bySource);
+  sourceChart = new Chart(document.getElementById('source-chart'),{type:'doughnut',data:{labels:sk,datasets:[{data:sk.map(k=>bySource[k]),backgroundColor:['#1A6AFF','#0FAA5E','#F5A623','#ED1566','#9333EA','#94A3B8','#EC4899','#0EA5E9']}]},options:{responsive:true,maintainAspectRatio:false}});
+  
+  if(trendChart) trendChart.destroy();
+  const days_sorted = Object.keys(byDay).sort();
+  trendChart = new Chart(document.getElementById('trend-chart'),{type:'line',data:{labels:days_sorted,datasets:[
+    {label:'Missing Account',data:days_sorted.map(d=>byDay[d].missing_acct),borderColor:'#ED1566',tension:0.3},
+    {label:'Missing Phone',data:days_sorted.map(d=>byDay[d].missing_ph),borderColor:'#F5A623',tension:0.3},
+  ]},options:{responsive:true,maintainAspectRatio:false}});
+  
+  const dt = document.querySelector('#drift-table tbody'); dt.innerHTML='';
+  driftRows.forEach(([k,n])=>{
+    const [src,camp] = k.split('|');
+    const status = n===1 ? 'singleton (likely typo)' : 'low count';
+    dt.innerHTML += '<tr><td>'+src+'</td><td><code>'+camp+'</code></td><td>'+n+'</td><td class="warn">'+status+'</td></tr>';
+  });
+  
+  const at = document.querySelector('#agent-table tbody'); at.innerHTML='';
+  Object.entries(agentVariants).sort((a,b)=>b[1].n-a[1].n).slice(0,50).forEach(([a,v])=>{
+    at.innerHTML += '<tr><td><code>'+a+'</code></td><td>'+v.n+'</td><td>'+Array.from(v.sources).join(', ')+'</td></tr>';
+  });
+  
+  const mt = document.querySelector('#missing-table tbody'); mt.innerHTML='';
+  rows.filter(r=>!r.account_number || !r.phone_number).slice(0,200).forEach(r=>{
+    const issues = [];
+    if(!r.account_number) issues.push('no account');
+    if(!r.phone_number) issues.push('no phone');
+    mt.innerHTML += '<tr><td>'+(r.submitted_at||'').split('T')[0]+'</td><td>'+(r.form_source||'')+'</td><td>'+(r.campaign||'')+'</td><td>'+(r.agent_name||'')+'</td><td>'+(r.account_number||'<span class="warn">MISSING</span>')+'</td><td>'+(r.phone_number||'<span class="warn">MISSING</span>')+'</td><td class="warn">'+issues.join(', ')+'</td></tr>';
+  });
+}
+load(7);
+</script></body></html>
