@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><title>Agent Drill-Down — SatCom CX</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+:root{--brand-blue:#1A6AFF;--brand-dark:#0A0A0A;--bg:#F5F7FA;--card:#FFFFFF;--green:#0FAA5E;--red:#ED1566;--amber:#F5A623;--text:#1a1a1a;--mid:#5f6360;--rule:#E0E5EC}
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);padding-bottom:40px}
+header{background:#FFF;padding:18px 40px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--rule)}
+header h1{font-size:22px;color:var(--brand-dark)}header .sub{color:var(--mid);font-size:13px;margin-top:2px}
+.container{padding:24px 40px}.row{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px}
+.tile{background:var(--card);padding:18px;border-radius:8px;border:1px solid var(--rule)}
+.tile .label{color:var(--mid);font-size:11px;text-transform:uppercase}
+.tile .value{font-size:26px;font-weight:600;color:var(--brand-dark);margin-top:4px}
+.card{background:var(--card);padding:20px;border-radius:8px;border:1px solid var(--rule);margin-bottom:20px}
+.card h2{font-size:16px;color:var(--brand-dark);margin-bottom:12px}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;padding:8px;border-bottom:2px solid var(--rule);color:var(--mid);font-weight:600;font-size:11px;text-transform:uppercase;cursor:pointer}
+td{padding:6px 8px;border-bottom:1px solid var(--rule)}tr:hover td{background:#F8FAFC}
+.chart-wrap{height:340px;position:relative}
+.controls{display:flex;gap:8px;margin-bottom:16px}.controls button{padding:8px 14px;border:1px solid var(--rule);background:#FFF;border-radius:6px;cursor:pointer;font-size:13px}
+.controls button.active{background:var(--brand-blue);color:#FFF;border-color:var(--brand-blue)}
+.badge{display:inline-block;padding:1px 8px;border-radius:12px;font-size:11px;font-weight:600}
+.b-comm{background:#0FAA5E22;color:#0FAA5E}.b-pd{background:#1A6AFF22;color:#1A6AFF}.b-np{background:#ED156622;color:#ED1566}
+.b-b2b{background:#F5A62322;color:#F5A623}.b-arm{background:#9333EA22;color:#9333EA}.b-sf{background:#94A3B822;color:#94A3B8}
+</style></head>
+<body>
+<header><div><h1>Agent Drill-Down</h1><div class="sub">Saves by agent — Forms data only (Genesys agent_id capture blocked until #173)</div></div>
+<div class="sub">SatCom CX · Operations Warehouse · <span id="last-updated"></span></div></header>
+<div class="container">
+  <div class="controls">
+    <button class="active" onclick="setRange(7,this)">Last 7d</button>
+    <button onclick="setRange(14,this)">Last 14d</button>
+    <button onclick="setRange(30,this)">Last 30d</button>
+    <button onclick="setRange(60,this)">Last 60d</button>
+  </div>
+  <div class="row">
+    <div class="tile"><div class="label">Total Sales</div><div class="value" id="t-sales">—</div></div>
+    <div class="tile"><div class="label">Active Agents</div><div class="value" id="t-agents">—</div></div>
+    <div class="tile"><div class="label">Top Agent Sales</div><div class="value" id="t-top">—</div></div>
+    <div class="tile"><div class="label">Avg Sales / Agent</div><div class="value" id="t-avg">—</div></div>
+  </div>
+  <div class="card"><h2>Top 20 Agents — Saves Leaderboard</h2><div class="chart-wrap"><canvas id="top-chart"></canvas></div></div>
+  <div class="card"><h2>Per-Agent Detail</h2><div style="overflow:auto;max-height:600px"><table id="agents-table"><thead><tr><th>Agent</th><th>Total Saves</th><th>Comm Saves</th><th>PD</th><th>Non Pay</th><th>B2B</th><th>Armstrong</th><th>Socket</th></tr></thead><tbody></tbody></table></div></div>
+</div>
+<script>
+const SUPA_URL='https://wgmzyameblsmhcommree.supabase.co'; const ANON='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndnbXp5YW1lYmxzbWhjb21tcmVlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA2OTY2NDMsImV4cCI6MjA5NjI3MjY0M30.VYuUjRNFiYkZpE8gmdVDvIxw1ZEyqH9XYyajiHiPqTM';
+let topChart;
+function setRange(days,btn){
+  document.querySelectorAll('.controls button').forEach(b=>b.classList.remove('active'));
+  if(btn) btn.classList.add('active');
+  loadReport(days);
+}
+function normAgent(n){
+  if(!n) return 'Unknown';
+  n = n.replace(/@satcomcx\.com/i,'').replace(/\./g,' ');
+  // Title case
+  return n.split(/\s+/).map(w=>w.charAt(0).toUpperCase()+w.slice(1).toLowerCase()).join(' ');
+}
+async function loadReport(days){
+  const since = new Date(Date.now() - days*24*60*60*1000).toISOString();
+  const url = SUPA_URL + '/rest/v1/sales_form_submissions?select=agent_name,form_source,submitted_at&submitted_at=gte.'+since;
+  const r = await fetch(url, {headers:{'apikey':ANON,'Authorization':'Bearer '+ANON,'Range':'0-49999','Range-Unit':'items'}});
+  if(!r.ok){ console.error(await r.text()); return;}
+  const rows = await r.json();
+  const byAgent = {};
+  rows.forEach(row=>{
+    const a = normAgent(row.agent_name);
+    if(!byAgent[a]) byAgent[a] = {total:0, comm_saves:0, pending_disconnect:0, non_pay:0, b2b:0, armstrong:0, socket_fiber:0};
+    byAgent[a].total++;
+    const k = (row.form_source||'').toLowerCase().replace(/[^a-z_]/g,'');
+    if(k in byAgent[a]) byAgent[a][k]++;
+  });
+  const sorted = Object.entries(byAgent).sort((a,b)=>b[1].total-a[1].total);
+  const total = rows.length, agents = sorted.length;
+  document.getElementById('t-sales').textContent = total.toLocaleString();
+  document.getElementById('t-agents').textContent = agents.toLocaleString();
+  document.getElementById('t-top').textContent = sorted.length ? sorted[0][1].total + ' (' + sorted[0][0] + ')' : '—';
+  document.getElementById('t-avg').textContent = agents ? (total/agents).toFixed(1) : '—';
+  document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleString();
+  // Top chart
+  const top20 = sorted.slice(0,20);
+  if(topChart) topChart.destroy();
+  topChart = new Chart(document.getElementById('top-chart'),{type:'bar',data:{labels:top20.map(([a])=>a),
+    datasets:[{label:'Total Saves',data:top20.map(([_,v])=>v.total),backgroundColor:'#1A6AFF'}]},
+    options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}}}});
+  // Table
+  const tbody = document.querySelector('#agents-table tbody'); tbody.innerHTML = '';
+  sorted.forEach(([a,v])=>{
+    tbody.innerHTML += '<tr><td><strong>'+a+'</strong></td><td><strong>'+v.total+'</strong></td><td>'+v.comm_saves+'</td><td>'+v.pending_disconnect+'</td><td>'+v.non_pay+'</td><td>'+v.b2b+'</td><td>'+v.armstrong+'</td><td>'+v.socket_fiber+'</td></tr>';
+  });
+}
+loadReport(7);
+</script></body></html>
