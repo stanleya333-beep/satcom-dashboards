@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><title>Scrub Report — SatCom CX</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+:root{--brand-blue:#1A6AFF;--brand-dark:#0A0A0A;--brand-soft:#CBDCE9;--bg:#F5F7FA;--card:#FFFFFF;--green:#0FAA5E;--red:#ED1566;--amber:#F5A623;--text:#1a1a1a;--mid:#5f6360;--rule:#E0E5EC}
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);padding-bottom:40px}
+header{background:#FFF;padding:18px 40px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--rule)}
+header h1{font-size:22px;color:var(--brand-dark)}header .sub{color:var(--mid);font-size:13px;margin-top:2px}
+.container{padding:24px 40px}.row{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px}
+.tile{background:var(--card);padding:18px;border-radius:8px;border:1px solid var(--rule)}
+.tile .label{color:var(--mid);font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+.tile .value{font-size:28px;font-weight:600;color:var(--brand-dark);margin-top:4px}
+.tile .sub{color:var(--mid);font-size:12px;margin-top:2px}
+.card{background:var(--card);padding:20px;border-radius:8px;border:1px solid var(--rule);margin-bottom:20px}
+.card h2{font-size:16px;color:var(--brand-dark);margin-bottom:12px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;padding:8px;border-bottom:2px solid var(--rule);color:var(--mid);font-weight:600;font-size:11px;text-transform:uppercase}
+td{padding:8px;border-bottom:1px solid var(--rule)}tr:hover td{background:#F8FAFC}
+.warn{color:var(--red);font-weight:600}.good{color:var(--green);font-weight:600}
+.chart-wrap{height:280px;position:relative}
+.controls{display:flex;gap:8px;margin-bottom:16px}.controls button{padding:8px 14px;border:1px solid var(--rule);background:#FFF;border-radius:6px;cursor:pointer;font-size:13px}
+.controls button.active{background:var(--brand-blue);color:#FFF;border-color:var(--brand-blue)}
+</style></head>
+<body>
+<header><div><h1>Scrub Report</h1><div class="sub">Lead imports — received vs loaded vs scrubbed, by reject reason</div></div>
+<div class="sub">SatCom CX · Operations Warehouse · <span id="last-updated"></span></div></header>
+<div class="container">
+  <div class="controls">
+    <button class="active" onclick="setRange(7,this)">Last 7d</button>
+    <button onclick="setRange(14,this)">Last 14d</button>
+    <button onclick="setRange(30,this)">Last 30d</button>
+    <button onclick="setRange(90,this)">Last 90d</button>
+  </div>
+  <div class="row">
+    <div class="tile"><div class="label">Total Received</div><div class="value" id="t-received">—</div></div>
+    <div class="tile"><div class="label">Loaded to Genesys</div><div class="value" id="t-loaded">—</div></div>
+    <div class="tile"><div class="label">Rejected</div><div class="value" id="t-rejected">—</div></div>
+    <div class="tile"><div class="label">Load %</div><div class="value" id="t-loadpct">—</div></div>
+  </div>
+  <div class="card"><h2>Daily — Received vs Loaded vs Rejected</h2><div class="chart-wrap"><canvas id="daily-chart"></canvas></div></div>
+  <div class="card"><h2>Rejection Reason Breakdown</h2><div class="chart-wrap"><canvas id="reason-chart"></canvas></div></div>
+  <div class="card"><h2>Per-Day Detail</h2><div style="max-height:400px;overflow:auto"><table id="daily-table"><thead><tr><th>Date</th><th>Received</th><th>Loaded</th><th>Rejected</th><th>R1 Invalid</th><th>R2 Intl</th><th>R3 TollFree</th><th>R4 DupList</th><th>R5 DupCross</th><th>R6 DNC</th><th>R8 30d/7d Dup</th><th>R9 Genesys Dup</th><th>R11 TZ</th><th>R12 TZ-Invalid</th><th>Load %</th></tr></thead><tbody></tbody></table></div></div>
+</div>
+<script>
+const SUPA_URL='https://wgmzyameblsmhcommree.supabase.co';
+const ANON='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndnbXp5YW1lYmxzbWhjb21tcmVlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA2OTY2NDMsImV4cCI6MjA5NjI3MjY0M30.VYuUjRNFiYkZpE8gmdVDvIxw1ZEyqH9XYyajiHiPqTM';
+const REJECT_LABELS = {1:'R1 Invalid NPA/NXX', 2:'R2 International', 3:'R3 Toll-Free', 4:'R4 Dup In List', 5:'R5 Dup Cross-Campaign', 6:'R6 DNC', 7:'R7', 8:'R8 30d/7d Account Dup', 9:'R9 Already Callable Genesys', 10:'R10', 11:'R11 Timezone Underivable', 12:'R12 Invalid Timezone'};
+const REJECT_COLORS = {1:'#ED1566',2:'#F5A623',3:'#F1C40F',4:'#1A6AFF',5:'#0FAA5E',6:'#9333EA',7:'#94A3B8',8:'#0EA5E9',9:'#FB923C',10:'#94A3B8',11:'#EC4899',12:'#DC2626'};
+let dailyChart, reasonChart;
+function setRange(days, btn){
+  document.querySelectorAll('.controls button').forEach(b=>b.classList.remove('active'));
+  if(btn) btn.classList.add('active');
+  loadReport(days);
+}
+async function fetchSql(query){
+  const r = await fetch(SUPA_URL + '/rest/v1/rpc/exec_sql', {method:'POST', headers:{'apikey':ANON,'Authorization':'Bearer '+ANON,'Content-Type':'application/json'}, body:JSON.stringify({query:query})});
+  if(!r.ok){ console.error(await r.text()); return null;}
+  return await r.json();
+}
+async function loadReport(days){
+  const since = new Date(Date.now() - days*24*60*60*1000).toISOString().split('T')[0];
+  // Pull straight from lead_imports_staging via PostgREST
+  const url = SUPA_URL + '/rest/v1/lead_imports_staging?select=status,reject_rule,created_at&created_at=gte.' + since + 'T00:00:00';
+  const r = await fetch(url, {headers:{'apikey':ANON,'Authorization':'Bearer '+ANON,'Range':'0-49999','Range-Unit':'items','Prefer':'count=exact'}});
+  if(!r.ok){ document.getElementById('t-received').textContent='ERR'; return;}
+  const rows = await r.json();
+  // Build daily aggregate
+  const byDay = {};
+  rows.forEach(row=>{
+    const day = row.created_at.split('T')[0];
+    if(!byDay[day]) byDay[day] = {received:0, loaded:0, rejected:0, reasons:{}};
+    byDay[day].received++;
+    if(row.status === 'loaded') byDay[day].loaded++;
+    else if(row.status === 'rejected'){
+      byDay[day].rejected++;
+      const rr = row.reject_rule || 0;
+      byDay[day].reasons[rr] = (byDay[day].reasons[rr] || 0) + 1;
+    }
+  });
+  const days_sorted = Object.keys(byDay).sort();
+  const totRec = rows.length;
+  const totLoad = rows.filter(r=>r.status==='loaded').length;
+  const totRej = rows.filter(r=>r.status==='rejected').length;
+  document.getElementById('t-received').textContent = totRec.toLocaleString();
+  document.getElementById('t-loaded').textContent = totLoad.toLocaleString();
+  document.getElementById('t-rejected').textContent = totRej.toLocaleString();
+  document.getElementById('t-loadpct').textContent = totRec ? (100*totLoad/totRec).toFixed(1)+'%' : '—';
+  document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleString();
+  // Daily chart
+  if(dailyChart) dailyChart.destroy();
+  dailyChart = new Chart(document.getElementById('daily-chart'),{
+    type:'bar',
+    data:{labels:days_sorted, datasets:[
+      {label:'Received', data:days_sorted.map(d=>byDay[d].received), backgroundColor:'#CBDCE9'},
+      {label:'Loaded', data:days_sorted.map(d=>byDay[d].loaded), backgroundColor:'#0FAA5E'},
+      {label:'Rejected', data:days_sorted.map(d=>byDay[d].rejected), backgroundColor:'#ED1566'},
+    ]},
+    options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{position:'top'}}, scales:{x:{stacked:false}, y:{stacked:false}}}
+  });
+  // Reason chart - aggregate
+  const reasonTotals = {};
+  rows.filter(r=>r.status==='rejected').forEach(r=>{
+    const rr = r.reject_rule || 0;
+    reasonTotals[rr] = (reasonTotals[rr] || 0) + 1;
+  });
+  const reasonKeys = Object.keys(reasonTotals).sort((a,b)=>+a-+b);
+  if(reasonChart) reasonChart.destroy();
+  reasonChart = new Chart(document.getElementById('reason-chart'),{
+    type:'bar',
+    data:{labels:reasonKeys.map(k=>REJECT_LABELS[k]||('R'+k)), datasets:[{label:'Rejections', data:reasonKeys.map(k=>reasonTotals[k]), backgroundColor:reasonKeys.map(k=>REJECT_COLORS[k]||'#94A3B8')}]},
+    options:{indexAxis:'y', responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}}
+  });
+  // Daily table
+  const tbody = document.querySelector('#daily-table tbody');
+  tbody.innerHTML = '';
+  days_sorted.reverse().forEach(d=>{
+    const o = byDay[d];
+    const pct = o.received ? (100*o.loaded/o.received).toFixed(1) : 0;
+    const cls = pct >= 50 ? 'good' : (pct >= 20 ? '' : 'warn');
+    tbody.innerHTML += '<tr><td>'+d+'</td><td>'+o.received+'</td><td>'+o.loaded+'</td><td>'+o.rejected+'</td>'
+      + [1,2,3,4,5,6,8,9,11,12].map(rr=>'<td>'+(o.reasons[rr]||0)+'</td>').join('')
+      + '<td class="'+cls+'">'+pct+'%</td></tr>';
+  });
+}
+loadReport(7);
+</script></body></html>
