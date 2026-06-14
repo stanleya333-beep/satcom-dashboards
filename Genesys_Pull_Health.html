@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><title>Genesys Pull Health — SatCom CX</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+:root{--brand-blue:#1A6AFF;--brand-dark:#0A0A0A;--bg:#F5F7FA;--card:#FFFFFF;--green:#0FAA5E;--red:#ED1566;--amber:#F5A623;--text:#1a1a1a;--mid:#5f6360;--rule:#E0E5EC}
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);padding-bottom:40px}
+header{background:#FFF;padding:18px 40px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--rule)}
+header h1{font-size:22px;color:var(--brand-dark)}header .sub{color:var(--mid);font-size:13px;margin-top:2px}
+.container{padding:24px 40px}.row{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px}
+.tile{background:var(--card);padding:18px;border-radius:8px;border:1px solid var(--rule)}
+.tile .label{color:var(--mid);font-size:11px;text-transform:uppercase}
+.tile .value{font-size:26px;font-weight:600;color:var(--brand-dark);margin-top:4px}.tile .sub{color:var(--mid);font-size:11px;margin-top:2px}
+.card{background:var(--card);padding:20px;border-radius:8px;border:1px solid var(--rule);margin-bottom:20px}
+.card h2{font-size:16px;color:var(--brand-dark);margin-bottom:12px}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;padding:8px;border-bottom:2px solid var(--rule);color:var(--mid);font-weight:600;font-size:11px;text-transform:uppercase}
+td{padding:6px 8px;border-bottom:1px solid var(--rule)}tr:hover td{background:#F8FAFC}
+.warn{color:var(--red);font-weight:600}.amber{color:var(--amber);font-weight:600}.good{color:var(--green);font-weight:600}
+.chart-wrap{height:280px;position:relative}
+</style></head>
+<body>
+<header><div><h1>Genesys Pull Health</h1><div class="sub">Conversation lag, contact_id capture, account/name coverage per pull</div></div>
+<div class="sub">SatCom CX · Operations Warehouse · <span id="last-updated"></span></div></header>
+<div class="container">
+  <div class="row">
+    <div class="tile"><div class="label">Calls 7d</div><div class="value" id="t-calls">—</div></div>
+    <div class="tile"><div class="label">Account Coverage %</div><div class="value" id="t-acct">—</div></div>
+    <div class="tile"><div class="label">Customer Name Coverage %</div><div class="value" id="t-name">—</div></div>
+    <div class="tile"><div class="label">Contact_id Coverage %</div><div class="value" id="t-cid">—</div></div>
+  </div>
+  <div class="card"><h2>Daily Pull Volume + Coverage Trend</h2><div class="chart-wrap"><canvas id="vol-chart"></canvas></div></div>
+  <div class="card"><h2>Per-Day Health Detail</h2><div style="overflow:auto"><table id="daily-table"><thead><tr><th>Date</th><th>Calls</th><th>Account %</th><th>Name %</th><th>Contact_id %</th><th>Campaign_name %</th><th>First Call</th><th>Last Call</th><th>Status</th></tr></thead><tbody></tbody></table></div></div>
+</div>
+<script>
+const SUPA_URL='https://wgmzyameblsmhcommree.supabase.co'; const ANON='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndnbXp5YW1lYmxzbWhjb21tcmVlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA2OTY2NDMsImV4cCI6MjA5NjI3MjY0M30.VYuUjRNFiYkZpE8gmdVDvIxw1ZEyqH9XYyajiHiPqTM';
+let volChart;
+async function load(){
+  // Pull aggregated stats per day from calls
+  const sinceISO = new Date(Date.now()-14*86400000).toISOString().split('T')[0];
+  // Use Supabase REST with select + aggregates (PostgREST doesn't have group_by; pull rows and aggregate client side, capped)
+  const url = SUPA_URL + '/rest/v1/calls?select=call_date_et,account_number,customer_name,contact_id,campaign_name,call_time_et&call_date_et=gte.'+sinceISO+'&direction=eq.outbound';
+  const r = await fetch(url,{headers:{'apikey':ANON,'Authorization':'Bearer '+ANON,'Range':'0-99999','Range-Unit':'items'}});
+  if(!r.ok){console.error(await r.text());return;}
+  const rows = await r.json();
+  const byDay = {};
+  rows.forEach(r=>{
+    const d = r.call_date_et;
+    if(!byDay[d]) byDay[d] = {n:0, acct:0, name:0, cid:0, camp:0, first:'', last:''};
+    const o = byDay[d];
+    o.n++;
+    if(r.account_number) o.acct++;
+    if(r.customer_name) o.name++;
+    if(r.contact_id) o.cid++;
+    if(r.campaign_name) o.camp++;
+    if(!o.first || r.call_time_et < o.first) o.first = r.call_time_et;
+    if(!o.last || r.call_time_et > o.last) o.last = r.call_time_et;
+  });
+  const days = Object.keys(byDay).sort();
+  const T = days.reduce((a,d)=>{a.n+=byDay[d].n;a.acct+=byDay[d].acct;a.name+=byDay[d].name;a.cid+=byDay[d].cid;return a;},{n:0,acct:0,name:0,cid:0});
+  document.getElementById('t-calls').textContent = T.n.toLocaleString();
+  document.getElementById('t-acct').textContent = T.n?(100*T.acct/T.n).toFixed(1)+'%':'—';
+  document.getElementById('t-name').textContent = T.n?(100*T.name/T.n).toFixed(1)+'%':'—';
+  document.getElementById('t-cid').textContent = T.n?(100*T.cid/T.n).toFixed(1)+'%':'—';
+  document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleString();
+  
+  if(volChart) volChart.destroy();
+  volChart = new Chart(document.getElementById('vol-chart'),{type:'line',data:{labels:days,datasets:[
+    {label:'Account %', data:days.map(d=>byDay[d].n?(100*byDay[d].acct/byDay[d].n):0), borderColor:'#1A6AFF', tension:0.3, yAxisID:'y1'},
+    {label:'Name %', data:days.map(d=>byDay[d].n?(100*byDay[d].name/byDay[d].n):0), borderColor:'#0FAA5E', tension:0.3, yAxisID:'y1'},
+    {label:'Contact_id %', data:days.map(d=>byDay[d].n?(100*byDay[d].cid/byDay[d].n):0), borderColor:'#F5A623', tension:0.3, yAxisID:'y1'},
+    {label:'Volume', data:days.map(d=>byDay[d].n), borderColor:'#94A3B8', backgroundColor:'#94A3B833', fill:true, tension:0.3, yAxisID:'y2', type:'bar'},
+  ]},options:{responsive:true,maintainAspectRatio:false,scales:{y1:{type:'linear',position:'left',ticks:{callback:v=>v+'%'},max:100},y2:{type:'linear',position:'right',grid:{display:false}}}}});
+  
+  const tb = document.querySelector('#daily-table tbody'); tb.innerHTML='';
+  days.reverse().forEach(d=>{
+    const o = byDay[d];
+    const aPct = (100*o.acct/o.n); const nPct = (100*o.name/o.n); const cPct = (100*o.cid/o.n); const camp = (100*o.camp/o.n);
+    const status = (aPct<90||nPct<70||camp<90) ? '<span class="warn">DEGRADED</span>' : '<span class="good">OK</span>';
+    tb.innerHTML += '<tr><td>'+d+'</td><td>'+o.n.toLocaleString()+'</td><td>'+aPct.toFixed(1)+'%</td><td>'+nPct.toFixed(1)+'%</td><td>'+cPct.toFixed(1)+'%</td><td>'+camp.toFixed(1)+'%</td><td>'+(o.first||'').toString().slice(0,8)+'</td><td>'+(o.last||'').toString().slice(0,8)+'</td><td>'+status+'</td></tr>';
+  });
+}
+load();
+</script></body></html>
